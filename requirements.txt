@@ -1,0 +1,56 @@
+# ============================================================
+# 本地 RAG 系统依赖清单
+# 安装命令：pip install -r requirements.txt
+# ============================================================
+
+
+# ── 核心依赖（必装）--------------------------------------------
+
+# 文档解析
+pdfminer.six==20251230      # PDF 文本提取
+python-docx==1.1.2          # .docx Word 文档解析
+openpyxl==3.1.5             # .xlsx Excel 文件读写（pandas 后端）
+
+# 数据处理
+numpy==2.4.3                # 向量矩阵运算、相似度计算
+pandas==3.0.1               # 结构化数据处理、Text-to-Code 执行环境
+scikit-learn==1.8.0         # TF-IDF 向量化（开发/测试阶段 embedding）
+
+
+# ── 生产推荐（二选一，按需安装）--------------------------------
+
+# 方案 A：sentence-transformers 本地语义 embedding（推荐）
+#   支持中英文混合，完全离线，无需 GPU
+#   使用方式：RAGSystem(embedding_backend="sentence_transformer")
+#
+sentence-transformers>=2.7.0
+torch>=2.0.0               # sentence-transformers 依赖
+
+# 方案 B：通过 Ollama 调用本地 embedding 模型
+#   需先安装 Ollama（https://ollama.com）并拉取模型：
+#   ollama pull nomic-embed-text
+#   使用方式：RAGSystem(embedding_backend="ollama")
+#   纯标准库调用，无需额外 Python 包
+
+
+# ── 向量库升级（数据量 > 50 万条时）---------------------------
+
+# ChromaDB 替换内置 NumpySQLiteVectorStore
+#   支持 HNSW 近似最近邻索引，百万级数据检索 < 10ms
+#   使用方式：create_vector_store(backend="chromadb")
+#
+chromadb>=0.5.0
+
+
+# ── 本地 LLM --------------------------------------------------
+#
+# 所有 LLM 调用均通过 Ollama HTTP API，无需 Python 包。
+# 安装步骤：
+#   1. 下载 Ollama：https://ollama.com
+#   2. 拉取中文模型：ollama pull qwen2.5:7b
+#   3. 启动服务（通常安装后自动启动）：ollama serve
+#
+# 推荐模型（按显存从低到高）：
+#   qwen2.5:3b   → 显存 < 4GB，中文效果一般
+#   qwen2.5:7b   → 显存 < 8GB，中文效果好（默认）
+#   qwen2.5:14b  → 显存 < 16GB，中文效果最佳
