@@ -128,3 +128,37 @@ python -m local_rag.main --docs ./test_docs_rag --rebuild
 python -m local_rag.main
 ```
 
+**对话历史记录和回答评价：**
+
+正常提问后，每条回答下面会多一行提示：
+
+```
+[已记录 a3f8c21d04b1]  输入 /good 或 /bad 评价本条回答
+```
+
+立即评价：
+
+```
+你的问题：/good 回答完整准确
+你的问题：/bad 来源文件错了，应该是产品文档
+```
+
+其他命令：
+
+```
+/log       → 显示统计摘要（好评率、平均分、低分问答列表）
+/export    → 导出 logs/review_export.md，完整可读版本，适合人工审查
+```
+
+------
+
+**生成的文件：**
+
+```
+logs/
+  conversations.jsonl    ← 机器可读，每行一条 JSON
+  conversations.md       ← 快速浏览用的表格
+  review_export.md       ← /export 后生成，完整问答+来源+反馈
+```
+
+`conversations.jsonl` 是后续改进的核心资产——每条记录包含问题、回答、命中分数、来源文件、用户反馈，可以直接用来：分析哪类问题失败率高、筛选差评记录补充知识库、积累标注数据为后续微调做准备。
