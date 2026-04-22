@@ -94,27 +94,33 @@ class TextChunker(BaseChunker):
         if not content:
             return []
 
-        # 文档短于 chunk_size，直接返回整体
+        # 先把 Markdown 表格整体提取，替换为占位符，防止被切断
+        content, tables = self._extract_tables(content)
+
         if len(content) <= self.chunk_size:
-            return [self._make_chunk(content, document, 0)]
+            chunks = [self._make_chunk(
+                self._restore_tables(content, tables), document, 0
+            )]
+            return chunks
 
         chunks = []
         start = 0
         chunk_index = 0
-        step = self.chunk_size - self.chunk_overlap  # 每次向前移动的距离
+        step = self.chunk_size - self.chunk_overlap
 
         while start < len(content):
             end = start + self.chunk_size
             chunk_text = content[start:end]
 
-            # 尝试在句子边界处断开，而不是硬切在字符中间
             if end < len(content):
                 chunk_text = self._snap_to_sentence_boundary(chunk_text)
 
             chunk_text = chunk_text.strip()
             if chunk_text:
+                # 还原表格占位符
+                restored = self._restore_tables(chunk_text, tables)
                 chunks.append(self._make_chunk(
-                    content=chunk_text,
+                    content=restored,
                     parent=document,
                     chunk_index=chunk_index,
                     extra_metadata={
@@ -127,6 +133,41 @@ class TextChunker(BaseChunker):
             start += step
 
         return chunks
+
+    def _extract_tables(self, content: str) -> tuple[str, dict]:
+        """
+        把 Markdown 表格替换成 __TABLE_0__ 这样的占位符
+        返回 (替换后的文本, {占位符: 原始表格文本} 的字典)
+        
+        Markdown 表格特征：
+        - 第一行是表头：| CPU | 最低配置 | 推荐配置 |
+        - 第二行是分隔：| --- | ------- | ------- |
+        - 后续行是数据：| 8 核 | 16 核 |
+        """
+        import re
+        tables = {}
+        
+        # 匹配完整表格：连续的以 | 开头的行
+        table_pattern = re.compile(
+            r'(\|.+\|\n\|[-| :]+\|\n(?:\|.+\|\n?)*)',
+            re.MULTILINE
+        )
+        
+        counter = [0]
+        def replace_table(m):
+            key = f"__TABLE_{counter[0]}__"
+            tables[key] = m.group(0)
+            counter[0] += 1
+            return key + "\n"
+        
+        result = table_pattern.sub(replace_table, content)
+        return result, tables
+
+    def _restore_tables(self, text: str, tables: dict) -> str:
+        """把占位符还原成原始表格"""
+        for key, table in tables.items():
+            text = text.replace(key, table)
+        return text
 
     def _snap_to_sentence_boundary(self, text: str) -> str:
         """

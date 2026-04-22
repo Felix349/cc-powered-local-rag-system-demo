@@ -172,7 +172,7 @@ class OllamaEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model: str = "nomic-embed-text",
+        model: str = "bge-m3",
         base_url: str = "http://localhost:11434",
     ):
         self._model = model

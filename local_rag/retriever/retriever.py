@@ -764,10 +764,13 @@ class Retriever:
             ollama_base_url=ollama_base_url,
             llm_model=llm_model,
         )
+        # 保存 LLM 配置，供 query rewrite 使用
+        self._ollama_url = ollama_base_url.rstrip("/")
+        self._llm_model = llm_model
 
-    def retrieve(self, question: str) -> RetrievalResult:
+    def _retrieve_once(self, question: str) -> RetrievalResult:
         """
-        主入口：路由 → 检索 → 返回统一结果
+        单次检索（内部方法），路由 → 执行对应路径 → 返回结果
         """
         # 路由判断
         route = self.router.route(question)
@@ -794,12 +797,6 @@ class Retriever:
             retrieval_path="semantic",
         )
         hits = self._semantic.retrieve(question)
-        
-        # 临时调试：打印命中结果
-        print(f"[DEBUG] 命中 {len(hits)} 个chunk")
-        for h in hits:
-            print(f"  score={h.score:.4f} | {h.document.content[:80].replace(chr(10),' ')!r}")
-    
         result.context_chunks = hits
         if not hits:
             result.error = "语义检索未找到相关内容"
@@ -835,3 +832,143 @@ class Retriever:
         result.chain_steps = ret.get("steps", [])
         result.error = ret.get("error")
         return result
+
+    def retrieve(self, question: str) -> RetrievalResult:
+        """
+        主入口：带自动重试的 Agentic 检索
+
+        流程：
+          1. 执行一次检索
+          2. 评估结果质量（分数够不够高、有没有命中）
+          3. 质量不足 → 让 LLM 改写问题 → 重新检索
+          4. 最多重试 max_attempts 次，返回历次结果中最好的那次
+        """
+        return self.retrieve_with_retry(question)
+
+    def retrieve_with_retry(
+        self,
+        question: str,
+        max_attempts: int = 3,
+        min_score: float = 0.72,
+    ) -> RetrievalResult:
+        """
+        Agentic 检索核心：多次尝试 + 问题改写
+
+        Args:
+            question     : 原始用户问题
+            max_attempts : 最大尝试次数（含第一次），默认 3
+            min_score    : 语义检索的最低可接受分数，低于此值触发重试
+        """
+        best_result: RetrievalResult = None
+        best_score: float = -1.0
+        current_question = question
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                print(f"\n[Agentic] 第 {attempt + 1} 次尝试，改写后的问题: {current_question!r}")
+
+            result = self._retrieve_once(current_question)
+
+            # 评估本次检索质量
+            score = self._evaluate_result(result)
+            print(f"[Agentic] 本次检索质量分: {score:.3f} (阈值={min_score})")
+
+            # 记录历次最好结果
+            if score > best_score:
+                best_score = score
+                best_result = result
+                # 把原始问题写回 result，保持展示一致
+                best_result.question = question
+
+            # 质量达标，直接返回
+            if score >= min_score:
+                if attempt > 0:
+                    print(f"[Agentic] 质量达标，采用第 {attempt + 1} 次结果")
+                return best_result
+
+            # 最后一次尝试，不再改写
+            if attempt == max_attempts - 1:
+                print(f"[Agentic] 已达最大尝试次数，返回历次最优结果 (score={best_score:.3f})")
+                break
+
+            # 质量不足，让 LLM 改写问题
+            rewritten = self._rewrite_query(question, current_question, attempt)
+            if rewritten is None or rewritten == current_question:
+                print("[Agentic] LLM 不可用或问题无法改写，停止重试")
+                break
+            current_question = rewritten
+
+        return best_result
+
+    def _evaluate_result(self, result: RetrievalResult) -> float:
+        """
+        评估检索结果质量，返回 0~1 的分数
+
+        评分逻辑：
+          - 没有命中任何 chunk → 0.0
+          - 有命中：取 top chunk 的相似度分数
+          - 结构化路径（numeric/chain_table）：有结果且无错误 → 0.85（视为质量足够）
+        """
+        path = result.retrieval_path
+
+        # 结构化路径：看有没有计算结果
+        if path in ("numeric", "chain_table"):
+            if result.structured_result is not None and not result.error:
+                return 0.85
+            return 0.2
+
+        # 语义路径：看 top chunk 的相似度分数
+        if not result.context_chunks:
+            return 0.0
+        return result.context_chunks[0].score
+
+    def _rewrite_query(
+        self,
+        original_question: str,
+        current_question: str,
+        attempt: int,
+    ) -> str:
+        """
+        让 LLM 把问题改写成不同的表达方式，以期检索到不同内容
+
+        改写策略随尝试次数递进：
+          attempt=0 → 同义替换，换个说法
+          attempt=1 → 拆解问题，聚焦关键实体
+        """
+        strategies = [
+            "用同义词替换关键词，换一种表达方式重新描述这个问题，保持语义不变",
+            "提取问题中最核心的实体和属性，用最简洁的关键词形式重新表达",
+        ]
+        strategy = strategies[min(attempt, len(strategies) - 1)]
+
+        prompt = f"""你是一个搜索查询优化专家。
+
+原始问题：{original_question}
+当前查询：{current_question}
+改写要求：{strategy}
+
+直接输出改写后的查询，不要有任何解释，不要加引号："""
+
+        try:
+            payload = json.dumps({
+                "model": self._llm_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0.3},
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                f"{self._ollama_url}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            rewritten = data["message"]["content"].strip().strip('"').strip("'")
+            return rewritten if rewritten else None
+
+        except Exception as e:
+            print(f"[Agentic] query rewrite 失败: {e}")
+            return None
+
