@@ -74,7 +74,7 @@ print(answer.display())
 
 ## 生产部署注意事项
 
-1. **Embedding 模型**：将 `embedding_backend` 从 `"tfidf"` 改为 `"sentence_transformer"`
+1. **Embedding 模型**：将 `embedding_backend` 从 `"tfidf"` 改为 `"bge-m3"`
 2. **中文模型**：推荐 `paraphrase-multilingual-MiniLM-L12-v2`（384 维，支持中英文）
 3. **LLM**：安装 Ollama 并拉取 `qwen2.5:7b`（中文效果最好）
 4. **向量库**：数据量 > 50 万条时，将 `vector_store` backend 改为 `chromadb`
@@ -91,4 +91,40 @@ print(answer.display())
 | 04_人力资源报告.docx | DOCXSemantic + Numeric       | "各部门人员占比" / "算法工程师平均薪资是多少？"              |
 | 05_财务销售数据.xlsx | XLSXNumeric + Chain-of-Table | "哪个季度毛利最高？" / "2024年营收总和是多少？" / "毛利率超过62%的季度里，哪个客户数最多？" |
 | 06_竞品分析数据.json | JSONNumeric + Chain-of-Table | "哪家竞品的NPS最高？" / "响应延迟低于200ms的竞品中，市场份额最大的是谁？" |
+
+## 部署参数
+
+**Embedding 模型选择：**
+
+| 模型                  | 典型分数范围 | 说明                            |
+| --------------------- | ------------ | ------------------------------- |
+| nomic-embed-text      | 0.5 ~ 0.9    | 分布较宽，高质量命中容易超 0.72 |
+| bge-m3                | 0.3 ~ 0.75   | 整体偏低，0.65 已是优质命中     |
+| sentence-transformers | 0.4 ~ 0.95   | 视具体模型而定                  |
+
+**四个预设配置说明：**
+
+| Profile 名             | embedding 模型          | 命中阈值 | 适用场景                   |
+| ---------------------- | ----------------------- | -------- | -------------------------- |
+| `development`          | TF-IDF                  | 0.30     | 开发调试，无需任何外部服务 |
+| `nomic`                | nomic-embed-text        | 0.72     | 英文为主，速度优先         |
+| `bge_m3`               | bge-m3                  | 0.65     | 中文为主，当前推荐 ★       |
+| `sentence_transformer` | paraphrase-multilingual | 0.75     | 本地运行，无需 Ollama      |
+
+每个 Profile 里还可以独立设置 `chunk_size`、`max_attempts`、`llm_model` 等，bge-m3 的 `chunk_size` 已经调大到 800（因为它支持 8192 token，可以放更多内容进每个 chunk）。
+
+**换模型完整流程：**
+
+python
+
+```python
+# 1. 打开 config.py，改顶部一行
+ACTIVE_PROFILE = "nomic"   # 换成 nomic
+
+# 2. 重新构建知识库（换了 embedding 模型必须 rebuild）
+python -m local_rag.main --docs ./test_docs_rag --rebuild
+
+# 3. 正常使用，阈值自动跟着 Profile 走
+python -m local_rag.main
+```
 
