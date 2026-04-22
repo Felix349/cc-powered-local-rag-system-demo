@@ -26,6 +26,7 @@ from pathlib import Path
 
 # ── 配置加载
 from local_rag.config import get_config, list_profiles
+from local_rag.utils.conversation_logger import ConversationLogger
 
 # ── 所有模块导入
 from local_rag.loaders.document_loader import DocumentLoader
@@ -263,12 +264,22 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_interactive(rag: RAGSystem):
+def run_interactive(rag: RAGSystem, cfg=None):
     """交互式问答循环"""
+    # 初始化对话记录器
+    logger = ConversationLogger(log_dir="./logs")
+    session_id = logger.new_session()
+    embedding_model = getattr(cfg, "embedding_model", "") or getattr(cfg, "embedding_backend", "")
+    last_record_id = None   # 记录最近一次问答的 ID，用于快速评价
+
     print("\n进入交互模式。输入问题后回车，输入 'q' 或 'exit' 退出。")
     print("特殊命令：")
-    print("  /stats   → 显示知识库统计")
-    print("  /add <路径> → 增量添加文件")
+    print("  /stats          → 显示知识库统计")
+    print("  /add <路径>     → 增量添加文件")
+    print("  /log            → 显示对话统计")
+    print("  /export         → 导出完整对话记录")
+    print("  /good [备注]    → 为上条回答标注好评")
+    print("  /bad  [备注]    → 为上条回答标注差评")
     print()
 
     while True:
@@ -276,6 +287,7 @@ def run_interactive(rag: RAGSystem):
             question = input("你的问题：").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n退出。")
+            logger.print_stats()
             break
 
         if not question:
@@ -283,8 +295,10 @@ def run_interactive(rag: RAGSystem):
 
         if question.lower() in ("q", "exit", "quit", "退出"):
             print("退出。")
+            logger.print_stats()
             break
 
+        # ── 统计
         if question.startswith("/stats"):
             stats = rag.stats()
             print(f"\n知识库统计：")
@@ -293,13 +307,51 @@ def run_interactive(rag: RAGSystem):
             print()
             continue
 
+        # ── 增量添加文件
         if question.startswith("/add "):
             file_path = question[5:].strip()
             rag.add_file(file_path)
             continue
 
+        # ── 对话记录统计
+        if question.startswith("/log"):
+            logger.print_stats()
+            continue
+
+        # ── 导出审查文件
+        if question.startswith("/export"):
+            logger.export_for_review()
+            continue
+
+        # ── 好评标注
+        if question.startswith("/good"):
+            if last_record_id:
+                comment = question[5:].strip()
+                logger.add_feedback(last_record_id, rating=1, comment=comment)
+            else:
+                print("还没有可评价的问答记录。")
+            continue
+
+        # ── 差评标注
+        if question.startswith("/bad"):
+            if last_record_id:
+                comment = question[4:].strip()
+                logger.add_feedback(last_record_id, rating=0, comment=comment)
+            else:
+                print("还没有可评价的问答记录。")
+            continue
+
+        # ── 正常问答
         answer = rag.ask(question)
         print(answer.display())
+
+        # 记录本次问答
+        last_record_id = logger.log(
+            answer,
+            session_id=session_id,
+            embedding_model=embedding_model,
+        )
+        print(f"[已记录 {last_record_id}]  输入 /good 或 /bad 评价本条回答")
 
 
 def main():
@@ -351,7 +403,7 @@ def main():
         return
 
     # 进入交互模式
-    run_interactive(rag)
+    run_interactive(rag, cfg=cfg)
 
 
 if __name__ == "__main__":

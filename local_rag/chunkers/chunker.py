@@ -46,6 +46,11 @@ class BaseChunker(ABC):
         if extra_metadata:
             metadata.update(extra_metadata)
 
+        # 加文件名前缀，增强语义锚定，让检索更准确
+        filename = parent.metadata.get("filename", "")
+        prefix = f"【来源：{filename}】\n" if filename else ""
+        enriched_content = prefix + content
+
         return Document(
             content=content,
             metadata=metadata,
@@ -171,17 +176,38 @@ class TextChunker(BaseChunker):
 
     def _snap_to_sentence_boundary(self, text: str) -> str:
         """
-        在文本末尾向前找最近的句子边界（。！？.!?），
-        在边界处截断，而不是硬切在字符中间。
-        如果找不到边界，就保留原文本。
+        在文本末尾向前找最近的合适断点，优先级：
+        1. 表格结束位置（最后一个以 | 开头的行末尾）
+        2. 段落边界（连续两个换行）
+        3. 句子边界（。！？.!?）
+        4. 找不到则保留原文
         """
+        # 优先级 1：在最后一个表格行末尾截断
+        lines = text.split("\n")
+        last_table_line = -1
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip().startswith("|"):
+                last_table_line = i
+                break
+        if last_table_line > 0:
+            # 确保截断点后面还有非表格内容（说明表格确实被截断了）
+            remaining = "\n".join(lines[last_table_line + 1:]).strip()
+            if remaining:
+                return "\n".join(lines[:last_table_line + 1])
+
+        # 优先级 2：段落边界（空行）
+        max_lookback = max(1, len(text) // 4)
+        para_pos = text.rfind("\n\n", len(text) - max_lookback)
+        if para_pos > len(text) // 2:
+            return text[:para_pos + 2]
+
+        # 优先级 3：句子边界
         sentence_endings = "。！？.!?\n"
-        # 从末尾向前扫描，最多回退 chunk_size 的 20%
-        max_lookback = max(1, len(text) // 5)
         for i in range(len(text) - 1, len(text) - max_lookback, -1):
             if text[i] in sentence_endings:
                 return text[:i + 1]
-        return text  # 找不到边界则保留原文
+
+        return text
 
 
 # ─────────────────────────────────────────────

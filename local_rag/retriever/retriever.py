@@ -910,14 +910,25 @@ class Retriever:
 
         评分逻辑：
           - 没有命中任何 chunk → 0.0
-          - 有命中：取 top chunk 的相似度分数
-          - 结构化路径（numeric/chain_table）：有结果且无错误 → 0.85（视为质量足够）
+          - 语义路径：取 top chunk 的相似度分数
+          - 结构化路径：有结果且无错误 → 0.85，但前提是
+            支撑结果的 context_chunks 相似度要 >= 0.50。
+            低于 0.50 说明找的是不相关的结构化数据，
+            直接返回实际相似度分数，不给虚高的 0.85，
+            避免用错误数据骗过 Agentic 的质量判断。
         """
         path = result.retrieval_path
 
-        # 结构化路径：看有没有计算结果
+        # 结构化路径
         if path in ("numeric", "chain_table"):
             if result.structured_result is not None and not result.error:
+                # 检查支撑这个结果的 chunk 相似度
+                if result.context_chunks:
+                    top_score = result.context_chunks[0].score
+                    if top_score < 0.50:
+                        # 相似度太低，找的是不相关的结构化数据
+                        # 返回实际分数而非固定 0.85，让 Agentic 继续重试
+                        return top_score
                 return 0.85
             return 0.2
 
