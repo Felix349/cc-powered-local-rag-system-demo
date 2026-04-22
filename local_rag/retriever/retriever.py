@@ -743,8 +743,12 @@ class Retriever:
         ollama_base_url: str = "http://localhost:11434",
         llm_model: str = "qwen2.5:7b",
         top_k: int = 5,
+        min_score: float = 0.65,
+        max_attempts: int = 3,
     ):
         self.router = router
+        self._min_score = min_score
+        self._max_attempts = max_attempts
 
         self._semantic = SemanticRetriever(
             embedder=embedder,
@@ -843,7 +847,7 @@ class Retriever:
           3. 质量不足 → 让 LLM 改写问题 → 重新检索
           4. 最多重试 max_attempts 次，返回历次结果中最好的那次
         """
-        return self.retrieve_with_retry(question)
+        return self.retrieve_with_retry(question, max_attempts=self._max_attempts, min_score=self._min_score)
 
     def retrieve_with_retry(
         self,

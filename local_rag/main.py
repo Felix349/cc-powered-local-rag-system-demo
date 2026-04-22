@@ -24,6 +24,9 @@ import sys
 from pathlib import Path
 
 
+# ── 配置加载
+from local_rag.config import get_config, list_profiles
+
 # ── 所有模块导入
 from local_rag.loaders.document_loader import DocumentLoader
 from local_rag.chunkers.chunker import ChunkingPipeline
@@ -66,11 +69,14 @@ class RAGSystem:
         storage_dir: str = "./vector_store",
         kb_name: str = "default",
         embedding_backend: str = "tfidf",
+        embedding_model: str = None,
         llm_model: str = "qwen2.5:7b",
         ollama_url: str = "http://localhost:11434",
         chunk_size: int = 500,
         chunk_overlap: int = 50,
         top_k: int = 5,
+        min_score: float = 0.65,
+        max_attempts: int = 3,
         stream: bool = True,
         router_backend: str = "rule",
     ):
@@ -86,7 +92,13 @@ class RAGSystem:
             chunk_overlap=chunk_overlap,
         )
 
-        self._embedder = create_embedder(embedding_backend)
+        # 构建 embedder 参数
+        embedder_kwargs = {}
+        if embedding_backend == "ollama" and embedding_model:
+            embedder_kwargs["model"] = embedding_model
+        elif embedding_backend == "sentence_transformer" and embedding_model:
+            embedder_kwargs["model_name"] = embedding_model
+        self._embedder = create_embedder(embedding_backend, **embedder_kwargs)
 
         self._store = create_vector_store(
             backend="numpy_sqlite",
@@ -106,6 +118,8 @@ class RAGSystem:
             ollama_base_url=ollama_url,
             llm_model=llm_model,
             top_k=top_k,
+            min_score=min_score,
+            max_attempts=max_attempts,
         )
 
         self._generator = AnswerGenerator(
@@ -292,14 +306,32 @@ def main():
     import textwrap
     args = parse_args()
 
+    # 从 config.py 加载配置，命令行参数可覆盖
+    cfg = get_config()
+    list_profiles()   # 启动时显示当前配置
+
+    # 命令行参数优先级高于 config，未指定时使用 config 的值
+    embedding_backend = args.embedding if args.embedding != "tfidf" else cfg.embedding_backend
+    embedding_model   = cfg.embedding_model
+    llm_model         = args.model if args.model != "qwen2.5:7b" else cfg.llm_model
+    ollama_url        = args.ollama if args.ollama != "http://localhost:11434" else cfg.ollama_url
+    router_backend    = args.router if args.router != "rule" else cfg.router_backend
+    kb_name           = args.kb if args.kb != "default" else cfg.kb_name
+    storage_dir       = args.storage if args.storage != "./vector_store" else cfg.storage_dir
+
     rag = RAGSystem(
-        storage_dir=args.storage,
-        kb_name=args.kb,
-        embedding_backend=args.embedding,
-        llm_model=args.model,
-        ollama_url=args.ollama,
+        storage_dir=storage_dir,
+        kb_name=kb_name,
+        embedding_backend=embedding_backend,
+        embedding_model=embedding_model,
+        llm_model=llm_model,
+        ollama_url=ollama_url,
         stream=not args.no_stream,
-        router_backend=args.router,
+        router_backend=router_backend,
+        min_score=cfg.min_score,
+        max_attempts=cfg.max_attempts,
+        chunk_size=cfg.chunk_size,
+        chunk_overlap=cfg.chunk_overlap,
     )
 
     # 如果指定了文档目录，先构建知识库
